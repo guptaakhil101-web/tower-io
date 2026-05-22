@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tower'io</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    
+    <style>
+        :root { --bg-color: #f5f2ed; --line-color: #d1ccc0; --dot-empty: #cbcbcb; --color-orange: #ffb775; --color-red: #f46c6c; --color-purple: #9989e3; --color-green: #88c188; --color-blue: #79a7f2; }
+        body { font-family: 'Georgia', serif; background-color: var(--bg-color); display: flex; flex-direction: column; align-items: center; margin: 0; padding-bottom: 150px; }
+        .tower { display: flex; flex-direction: column-reverse; margin-top: 20px; border-top: 2px solid var(--line-color); }
+        .row { display: flex; align-items: center; padding: 12px 0; border-bottom: 2px solid var(--line-color); width: 320px; justify-content: space-between; }
+        .slots { display: flex; gap: 12px; }
+        .slot { width: 32px; height: 32px; background-color: var(--dot-empty); border-radius: 50%; }
+        
+        /* Feedback Area */
+        .feedback { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; width: 28px; height: 28px; }
+        
+        /* The Dots: Invisible by default */
+        .feed-dot { width: 10px; height: 10px; border-radius: 50%; background-color: transparent; border: 1.5px solid transparent; }
+        
+        /* Correct color + Correct position = Solid Black */
+        .feed-dot.black { background-color: #333; border-color: #333; }
+        
+        /* Correct color + Wrong position = Empty/Hollow Circle */
+        .feed-dot.white { background-color: transparent; border-color: #333; }
+
+        .controls { position: fixed; bottom: 20px; background: white; padding: 15px; border-radius: 20px; border: 2px solid #333; display: flex; flex-direction: column; gap: 10px; align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .palette { display: flex; gap: 10px; }
+        .color-opt { width: 42px; height: 42px; border-radius: 50%; cursor: pointer; border: 1px solid #999; }
+        .btn { padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; border: 2px solid #333; background: white; }
+        .orange { background-color: var(--color-orange); } .red { background-color: var(--color-red); } .purple { background-color: var(--color-purple); } .green { background-color: var(--color-green); } .blue { background-color: var(--color-blue); }
+        #setup { position: fixed; inset: 0; background: var(--bg-color); z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; }
+    </style>
+</head>
+<body>
+
+    <div id="setup">
+        <h1>Tower'io</h1>
+        <input type="text" id="roomID" placeholder="Enter Room Name" style="padding:12px; width:220px; border-radius:8px; border:1px solid #ccc;">
+        <div style="display:flex; gap:10px;">
+            <button class="btn" onclick="initGame('setter')">I am SETTER</button>
+            <button class="btn" onclick="initGame('breaker')">I am BREAKER</button>
+        </div>
+    </div>
+
+    <h3 id="status">Connecting...</h3>
+    <div class="tower" id="tower"></div>
+
+    <div class="controls" id="game-controls" style="display:none">
+        <div class="palette">
+            <div class="color-opt orange" onclick="addColor('orange')"></div>
+            <div class="color-opt red" onclick="addColor('red')"></div>
+            <div class="color-opt purple" onclick="addColor('purple')"></div>
+            <div class="color-opt green" onclick="addColor('green')"></div>
+            <div class="color-opt blue" onclick="addColor('blue')"></div>
+        </div>
+        <div style="display:flex; gap:10px;">
+            <button class="btn" onclick="clearCurrentGuess()" style="background:#eee;">CLR</button>
+            <button class="btn" onclick="submitMove()">SUBMIT</button>
+        </div>
+    </div>
+
+    <script>
+        // --- YOUR UNIQUE FIREBASE CONFIG ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyD3c-Inyd8BFrcYxdsU6Tpv3ihgCgunm9k",
+            authDomain: "tower-io-2b902.firebaseapp.com",
+            projectId: "tower-io-2b902",
+            storageBucket: "tower-io-2b902.firebasestorage.app",
+            messagingSenderId: "902529571360",
+            appId: "1:902529571360:web:9e61f39e9266e58833ba45",
+            databaseURL: "https://tower-io-2b902-default-rtdb.firebaseio.com"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+        
+        let role = ''; 
+        let roomName = '';
+        let currentGuess = [];
+        let secretCode = null;
+
+        const tower = document.getElementById('tower');
+        for (let i = 0; i < 10; i++) {
+            tower.innerHTML += `
+                <div class="row" id="row-${i}">
+                    <div class="slots"><div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div></div>
+                    <div class="feedback"><div class="feed-dot"></div><div class="feed-dot"></div><div class="feed-dot"></div><div class="feed-dot"></div></div>
+                </div>`;
+        }
+
+        function initGame(selectedRole) {
+            roomName = document.getElementById('roomID').value.trim().toLowerCase();
+            if (!roomName) return alert("Enter a room name!");
+            role = selectedRole;
+            document.getElementById('setup').style.display = 'none';
+            document.getElementById('game-controls').style.display = 'flex';
+            
+            const roomRef = db.ref('rooms/' + roomName);
+            roomRef.on('value', (snapshot) => {
+                const data = snapshot.val();
+                if (!data) {
+                    document.getElementById('status').innerText = (role === 'setter') ? "Set your secret code!" : "Waiting for setter...";
+                    return;
+                };
+                
+                secretCode = data.secretCode;
+                if (role === 'breaker') {
+                    document.getElementById('status').innerText = secretCode ? "Code is set! Break it." : "Waiting for setter...";
+                }
+                
+                if (data.guesses) {
+                    renderAllGuesses(data.guesses);
+                }
+            });
+        }
+
+        function addColor(c) {
+            if (currentGuess.length < 4) {
+                currentGuess.push(c);
+                updateRowUI();
+            }
+        }
+
+        function clearCurrentGuess() {
+            currentGuess = [];
+            updateRowUI();
+        }
+
+        function updateRowUI() {
+            // Find which row we are currently typing in
+            const activeRowIdx = (role === 'setter' && !secretCode) ? 0 : (document.querySelectorAll('.row-filled').length);
+            const rowEl = document.getElementById(`row-${activeRowIdx}`);
+            if(!rowEl) return;
+            const slots = rowEl.querySelectorAll('.slot');
+            slots.forEach(s => s.className = 'slot'); // reset all to gray
+            currentGuess.forEach((color, i) => slots[i].className = `slot ${color}`);
+        }
+
+        function submitMove() {
+            if (currentGuess.length < 4) return alert("Pick 4 colors!");
+            const roomRef = db.ref('rooms/' + roomName);
+
+            if (role === 'setter' && !secretCode) {
+                roomRef.update({ secretCode: currentGuess });
+                alert("Code Set!");
+                currentGuess = [];
+                document.querySelectorAll('.slot').forEach(s => s.className = 'slot');
+            } else {
+                if (!secretCode) return alert("Wait for Setter!");
+                roomRef.child('guesses').push(currentGuess);
+                currentGuess = [];
+            }
+        }
+
+        function renderAllGuesses(guessesObj) {
+            const guesses = Object.values(guessesObj);
+            // Clear filled status for fresh render
+            document.querySelectorAll('.row-filled').forEach(r => r.classList.remove('row-filled'));
+            
+            guesses.forEach((guess, index) => {
+                const row = document.getElementById(`row-${index}`);
+                row.classList.add('row-filled');
+                const slots = row.querySelectorAll('.slot');
+                guess.forEach((c, i) => slots[i].className = `slot ${c}`);
+                
+                // Process Feedback
+                const feedback = getFeedback(secretCode, guess);
+                const dots = row.querySelectorAll('.feed-dot');
+                
+                // Reset all dots to invisible first
+                dots.forEach(d => d.className = 'feed-dot'); 
+
+                let dIdx = 0;
+                // Add black dots (Solid)
+                for(let b=0; b<feedback.black; b++) dots[dIdx++].className = 'feed-dot black';
+                // Add white dots (Hollow/Empty)
+                for(let w=0; w<feedback.white; w++) dots[dIdx++].className = 'feed-dot white';
+
+                if (feedback.black === 4) document.getElementById('status').innerText = "Game Over: Breaker Won!";
+            });
+            if (guesses.length >= 10) document.getElementById('status').innerText = "Game Over: Setter Won!";
+        }
+
+        function getFeedback(code, guess) {
+            let black = 0, white = 0;
+            let cCopy = [...code], gCopy = [...guess];
+            // Black dots logic
+            for(let i=0; i<4; i++) { if(gCopy[i]===cCopy[i]) { black++; cCopy[i]=null; gCopy[i]=null; } }
+            // White dots logic
+            for(let i=0; i<4; i++) { if(gCopy[i]) { let idx=cCopy.indexOf(gCopy[i]); if(idx!==-1) { white++; cCopy[idx]=null; } } }
+            return { black, white };
+        }
+    </script>
+</body>
+</html>
